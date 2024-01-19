@@ -1,0 +1,16 @@
+mwxml
+mwparserfromhell
+nltk
+mysql-connector-python
+tqdm
+wikipedia-api
+datasets
+pandas
+transformers
+torch
+sentencepiece
+accelerate
+requests
+bs4
+evaluate
+rouge_score
