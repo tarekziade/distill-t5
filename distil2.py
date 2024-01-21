@@ -4,7 +4,7 @@ from datasets import load_dataset
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from torch.nn.functional import log_softmax, softmax
-
+from torch import nn
 from torch import tensor
 
 mps_device = torch.device("mps")
@@ -20,7 +20,7 @@ teacher_model.eval()
 
 tokenizer = T5Tokenizer.from_pretrained("cnicu/t5-small-booksum")
 
-train_dataset = load_dataset("kmfoda/booksum", split="train[:1%]")
+train_dataset = load_dataset("kmfoda/booksum", split="train")
 train_dataset = train_dataset.select_columns(
     [
         "summary_length",
@@ -37,7 +37,7 @@ def test_model(prefix, model):
     model.eval()
 
     input_ids = tokenizer.encode(
-        "summarize: " + TEST_DATA,
+        TEST_DATA,
         return_tensors="pt",
         padding="max_length",
         truncation=True,
@@ -59,7 +59,7 @@ def test_model(prefix, model):
 
 def tokenize_function(example):
     inputs = tokenizer(
-        ["summarize: " + item for item in example["chapter"]],
+        example["chapter"],
         padding="max_length",
         truncation=True,
         max_length=512,
@@ -74,9 +74,9 @@ def tokenize_function(example):
     )
 
     return {
-        "input_ids": inputs.input_ids.squeeze(),
-        "attention_mask": inputs.attention_mask.squeeze(),
-        "labels": targets.input_ids.squeeze(),
+        "input_ids": inputs.input_ids,
+        "attention_mask": inputs.attention_mask,
+        "labels": targets.input_ids,
     }
 
 
@@ -86,10 +86,14 @@ train_dataset = train_dataset.remove_columns(
 )
 
 
+train_dataset.set_format(
+    type="torch", columns=["input_ids", "attention_mask", "labels"]
+)
+
 print(train_dataset)
 
 config = teacher_model.config
-config.num_layers = 2
+# config.num_layers = 2
 # config.d_model = 128
 # config.d_ff = 512
 # config.d_kv = 64
@@ -97,41 +101,58 @@ config.num_layers = 2
 student_model = T5ForConditionalGeneration(config)
 student_model.to(mps_device)
 
-test_model("Before distillation: ", student_model)
-
-student_model.train()
-
 
 # Hyperparameters
-learning_rate = 0.001
-batch_size = 32
-num_epochs = 1
-temperature = 2
+learning_rate = 0.005
+batch_size = 16
+num_epochs = 13
+temperature = 20
+alpha = 0.7
 
 
-def collate_fn(batch):
-    input_ids = tensor([item["input_ids"] for item in batch]).to(mps_device)
-    attention_mask = tensor([item["attention_mask"] for item in batch]).to(mps_device)
-    labels = tensor([item["labels"] for item in batch]).to(mps_device)
-    return {"input_ids": input_ids, "attention_mask": attention_mask, "labels": labels}
-
-
-# DataLoader
 train_loader = DataLoader(
-    train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn
+    train_dataset,
+    batch_size=batch_size,
+    shuffle=True,
 )
 
 optimizer = torch.optim.AdamW(student_model.parameters(), lr=learning_rate)
+
+
+def calculate_loss(student_outputs, teacher_outputs, labels):
+    s_logits = student_outputs.logits
+    t_logits = teacher_outputs.logits
+
+    vocab_size = s_logits.size(-1)
+    ce_logits = s_logits.view(-1, vocab_size)
+    ce_labels = labels.view(-1)
+    ce_loss = torch.nn.functional.cross_entropy(ce_logits, ce_labels)
+    student_log_probs = log_softmax(s_logits.view(-1, vocab_size) / temperature, dim=-1)
+    teacher_probs = softmax(t_logits.view(-1, vocab_size) / temperature, dim=-1)
+
+    distill_loss = torch.nn.functional.kl_div(
+        student_log_probs, teacher_probs, reduction="batchmean"
+    )
+    loss = (1 - alpha) * ce_loss + (
+        alpha * temperature**2 / batch_size**2
+    ) * distill_loss
+
+    return loss
 
 
 # Training Loop
 for epoch in range(num_epochs):
     loss_value = 0
 
-    progress_bar = tqdm(train_loader, desc=f"Epoch {epoch} - Loss {loss_value}")
+    test_model("Before epoch " + str(epoch), student_model)
+    student_model.train()
+
+    progress_bar = tqdm(train_loader, desc=f"Epoch {epoch}")
 
     for batch in progress_bar:
         optimizer.zero_grad()
+
+        batch = dict([(k, v.to(mps_device)) for k, v in batch.items()])
 
         # Forward pass through the teacher model
         with torch.no_grad():
@@ -140,15 +161,7 @@ for epoch in range(num_epochs):
         # Forward pass through the student model
         student_outputs = student_model(**batch)
         assert student_outputs.logits.size() == teacher_outputs.logits.size()
-
-        student_log_probs = log_softmax(student_outputs.logits / temperature, dim=-1)
-        teacher_probs = softmax(teacher_outputs.logits / temperature, dim=-1)
-
-        # Calculate loss
-        loss = torch.nn.functional.kl_div(
-            student_log_probs, teacher_probs, reduction="batchmean"
-        )
-
+        loss = calculate_loss(student_outputs, teacher_outputs, batch["labels"])
         # Backpropagation
         loss.backward()
         optimizer.step()
