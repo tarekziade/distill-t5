@@ -3,8 +3,8 @@ from transformers import (
     T5ForConditionalGeneration,
     T5Tokenizer,
     T5Config,
-    Trainer,
-    TrainingArguments,
+    Seq2SeqTrainer,
+    Seq2SeqTrainingArguments,
 )
 from datasets import load_dataset, load_metric
 import numpy as np
@@ -20,13 +20,13 @@ def load_and_shrink_t5_model(model_name):
 
     # Create a new T5 configuration for the shrunk model
     new_config = T5Config.from_pretrained(
-        model_name, num_decoder_layers=3, num_encoder_layers=3
+        model_name, num_decoder_layers=3, num_encoder_layers=6
     )
 
     shrunk_model = T5ForConditionalGeneration(new_config).to(device)
 
     # Copy selected layers from the original model
-    for i, layer_idx in enumerate([0, 2, 4]):
+    for i, layer_idx in enumerate([0, 1, 2, 3, 4, 5]):
         shrunk_model.encoder.block[i] = original_model.encoder.block[layer_idx]
 
     for i, layer_idx in enumerate([1, 3, 5]):
@@ -68,17 +68,17 @@ def load_and_tokenize_dataset(tokenizer):
 
     def tokenize_function(example):
         inputs = tokenizer(
-            example["chapter"],
+            ["summarize: " + text for text in example["chapter"]],
             padding="max_length",
             truncation=True,
-            max_length=512,
+            max_length=1024,
             return_tensors="pt",
         )
         targets = tokenizer(
             example["summary_text"],
             padding="max_length",
             truncation=True,
-            max_length=256,
+            max_length=512,
             return_tensors="pt",
         )
 
@@ -106,21 +106,22 @@ def fine_tune_model(model):
     tokenized_datasets = load_and_tokenize_dataset(tokenizer)
 
     # Training Arguments
-    training_args = TrainingArguments(
+    training_args = Seq2SeqTrainingArguments(
         output_dir="./results",
         num_train_epochs=8,
-        learning_rate=0.01,
+        learning_rate=3e-4,
+        lr_scheduler_type="constant",
         per_device_train_batch_size=8,
         per_device_eval_batch_size=2,
         warmup_steps=500,
-        weight_decay=0.01,
+        weight_decay=0.0001,
         logging_dir="./logs",
         logging_steps=10,
-        # evaluation_strategy="epoch",
-        # eval_steps=2,
+        report_to="wandb",
+        do_eval=True,
     )
 
-    trainer = Trainer(
+    trainer = Seq2SeqTrainer(
         model=model,
         args=training_args,
         train_dataset=tokenized_datasets["train"],

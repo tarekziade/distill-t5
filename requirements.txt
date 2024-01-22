@@ -14,3 +14,4 @@ requests
 bs4
 evaluate
 rouge_score
+wandb
