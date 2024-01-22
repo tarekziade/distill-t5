@@ -11,27 +11,22 @@ import numpy as np
 import nltk
 
 
+TEST_DATA = """\
+The tower is 324 metres (1,063 ft) tall, about the same height as an 81-storey building, and the tallest structure in Paris. Its base is square, measuring 125 metres (410 ft) on each side. During its construction, the Eiffel Tower surpassed the Washington Monument to become the tallest man-made structure in the world, a title it held for 41 years until the Chrysler Building in New York City was finished in 1930. It was the first structure to reach a height of 300 metres. Due to the addition of a broadcasting aerial at the top of the tower in 1957, it is now taller than the Chrysler Building by 5.2 metres (17 ft). Excluding transmitters, the Eiffel Tower is the second tallest free-standing structure in France after the Millau Viaduct.
+"""
+
+
+device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+print(f"Using device: {device}")
+
+
 def load_and_shrink_t5_model(model_name):
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    shrunk_model = T5ForConditionalGeneration.from_pretrained(model_name).to(device)
 
-    print(f"Using device: {device}")
-    # Load the original T5 model (cnicu/t5-small-booksum)
-    original_model = T5ForConditionalGeneration.from_pretrained(model_name).to(device)
+    for i in reversed([1, 3, 5]):
+        del shrunk_model.decoder.block[i]
 
-    # Create a new T5 configuration for the shrunk model
-    new_config = T5Config.from_pretrained(
-        model_name, num_decoder_layers=3, num_encoder_layers=6
-    )
-
-    shrunk_model = T5ForConditionalGeneration(new_config).to(device)
-
-    # Copy selected layers from the original model
-    for i, layer_idx in enumerate([0, 1, 2, 3, 4, 5]):
-        shrunk_model.encoder.block[i] = original_model.encoder.block[layer_idx]
-
-    for i, layer_idx in enumerate([1, 3, 5]):
-        shrunk_model.decoder.block[i] = original_model.decoder.block[layer_idx]
-
+    shrunk_model.config.num_decoder_layers = 3
     return shrunk_model
 
 
@@ -71,14 +66,14 @@ def load_and_tokenize_dataset(tokenizer):
             ["summarize: " + text for text in example["chapter"]],
             padding="max_length",
             truncation=True,
-            max_length=1024,
+            max_length=512,
             return_tensors="pt",
         )
         targets = tokenizer(
             example["summary_text"],
             padding="max_length",
             truncation=True,
-            max_length=512,
+            max_length=200,
             return_tensors="pt",
         )
 
@@ -108,10 +103,10 @@ def fine_tune_model(model):
     # Training Arguments
     training_args = Seq2SeqTrainingArguments(
         output_dir="./results",
-        num_train_epochs=8,
+        num_train_epochs=1,
         learning_rate=3e-4,
         lr_scheduler_type="constant",
-        per_device_train_batch_size=8,
+        per_device_train_batch_size=4,
         per_device_eval_batch_size=2,
         warmup_steps=500,
         weight_decay=0.0001,
@@ -119,6 +114,9 @@ def fine_tune_model(model):
         logging_steps=10,
         report_to="wandb",
         do_eval=True,
+        # evaluation_strategy="steps",
+        # eval_steps=10,
+        load_best_model_at_end=True,
     )
 
     trainer = Seq2SeqTrainer(
@@ -132,8 +130,37 @@ def fine_tune_model(model):
     trainer.train()
 
 
+def test_model(prefix, model):
+    tokenizer = T5Tokenizer.from_pretrained("cnicu/t5-small-booksum")
+
+    model.eval()
+
+    input_ids = tokenizer.encode(
+        "summarize: " + TEST_DATA,
+        return_tensors="pt",
+        padding="max_length",
+        truncation=True,
+        max_length=512,
+        add_special_tokens=False,
+    ).to(device)
+
+    generated_ids = model.generate(input_ids, max_length=120)[0]
+    print(
+        prefix
+        + "\n"
+        + tokenizer.decode(
+            generated_ids,
+            skip_special_tokens=True,
+            remove_invalid_values=True,
+        )
+    )
+
+
 if __name__ == "__main__":
     shrunk_model = load_and_shrink_t5_model("cnicu/t5-small-booksum")
-
-    fine_tune_model(shrunk_model)
-    shrunk_model.save_pretrained("sft-t5-small")
+    test_model("After Shrink, before fine-tuning: ", shrunk_model)
+    try:
+        fine_tune_model(shrunk_model)
+    finally:
+        test_model("After Shrink and fine-tuning ", shrunk_model)
+        shrunk_model.save_pretrained("sft-t5-small")
