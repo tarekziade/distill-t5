@@ -1,5 +1,12 @@
+"""
+Shrink and Fine-tune a T5 model for summarization.
+
+1. remove 50% of the decoder layers
+2. fine-tune the shrinked model with various datasets
+"""
 import os
 import functools
+
 import torch
 from transformers import (
     T5ForConditionalGeneration,
@@ -12,8 +19,6 @@ from datasets import (
     load_dataset,
     load_metric,
     concatenate_datasets,
-    Dataset,
-    DatasetDict,
 )
 import numpy as np
 import nltk
@@ -157,26 +162,18 @@ def load_and_tokenize_dataset(tokenizer):
     train_dataset = load_dataset("kmfoda/booksum")
     train_dataset = prepare_dataset(train_dataset, "chapter", "summary_text")
 
-    print("Loading Wikipedia")
-    train_dataset2 = load_dataset("tarekziade/wikipedia-topics", split="train[:5%]")
-    train_dataset2 = prepare_dataset(train_dataset2, "text", "summary")
-    train_dataset["train"] = concatenate_datasets(
-        [train_dataset["train"], train_dataset2]
-    )
-
-    print("Loading xsum")
-    train_dataset3 = load_dataset("EdinburghNLP/xsum", split="train[:2%]")
-    train_dataset3 = prepare_dataset(train_dataset3, "document", "summary")
-    train_dataset["train"] = concatenate_datasets(
-        [train_dataset["train"], train_dataset3]
-    )
-
-    print("Loading tldr_news")
-    train_dataset4 = load_dataset("JulesBelveze/tldr_news", split="train[:50%]")
-    train_dataset4 = prepare_dataset(train_dataset4, "content", "headline")
-    train_dataset["train"] = concatenate_datasets(
-        [train_dataset["train"], train_dataset4]
-    )
+    # adding more data to the test split from Wikipedia, xsum and tldr_news
+    for dataset, split, source_field, target_field in (
+        ("tarekziade/wikipedia-topics", "train[:5%]", "text", "summary"),
+        ("EdinburghNLP/xsum", "train[:2%]", "document", "summary"),
+        ("JulesBelveze/tldr_news", "train[:50%]", "content", "headline"),
+    ):
+        print(f"Loading {dataset}")
+        extra_dataset = load_dataset(dataset, split=split)
+        extra_dataset = prepare_dataset(extra_dataset, source_field, target_field)
+        train_dataset["train"] = concatenate_datasets(
+            [train_dataset["train"], extra_dataset]
+        )
 
     return train_dataset.shuffle()
 
@@ -254,7 +251,7 @@ if __name__ == "__main__":
     # model_name = "Falconsai/text_summarization"
     # model_name = "flax-community/t5-base-cnn-dm"
     # tokenizer_name = "t5-base"
-    os.environ["WANDB_PROJECT"] = "shrink and fine-tune"  # name your W&B project
+    os.environ["WANDB_PROJECT"] = "shrink-and-fine-tune"  # name your W&B project
     os.environ["WANDB_LOG_MODEL"] = "checkpoint"  # log all model checkpoints
 
     model_name = tokenizer_name = "JulesBelveze/t5-small-headline-generator"
@@ -266,8 +263,12 @@ if __name__ == "__main__":
         fine_tune_model(shrunk_model, tokenizer)
     finally:
         test_model("After Shrink and fine-tuning ", shrunk_model, tokenizer)
-        shrunk_model.save_pretrained(
-            model_name.split("/")[-1]
-            + "-sft-"
-            + str(shrunk_model.config.num_decoder_layers)
+
+        target_dir = (
+            f"{model_name.split('/')[-1]}-sft-{shrunk_model.config.num_decoder_layers}"
         )
+
+        shrunk_model.save_pretrained(target_dir)
+        tokenizer.save_pretrained(target_dir)
+
+        # TODO: save the onnx quantized version inside target_dir/onnx for transformers.js
