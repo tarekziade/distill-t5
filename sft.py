@@ -35,15 +35,32 @@ def clean_text(text):
     return text.strip()
 
 
+def get_size(model):
+    size = sum(p.numel() for p in model.parameters() if p.requires_grad) / 1_000_000
+    return "%.2fM" % size
+
+
 def load_and_shrink_t5_model(model_name, tokenizer):
     shrunk_model = T5ForConditionalGeneration.from_pretrained(model_name).to(device)
+    current_decoder_layers = shrunk_model.config.num_decoder_layers
+    new_size = int(current_decoder_layers / 2)
+
+    print(
+        f"This model has {current_decoder_layers} layers, and {get_size(shrunk_model)} parameters shrinking in half"
+    )
 
     test_model("Before Shrink, before fine-tuning: ", shrunk_model, tokenizer)
 
-    for i in reversed([1, 3, 5]):
+    layers_to_remove = [i for i in range(1, new_size * 2, 2)]
+
+    for i in reversed(layers_to_remove):
         del shrunk_model.decoder.block[i]
 
-    shrunk_model.config.num_decoder_layers = 3
+    shrunk_model.config.num_decoder_layers = new_size
+    print(
+        f"This model has now {new_size} layers and {get_size(shrunk_model)} parameters"
+    )
+
     return shrunk_model
 
 
@@ -113,7 +130,6 @@ def load_and_tokenize_dataset(tokenizer):
             lambda x: x[source_field] is not None and x[summary_field] is not None
         )
 
-        dataset = train_dataset.map(tokenize_function, batched=True)
         dataset = dataset.map(
             functools.partial(
                 tokenize_function, source_field=source_field, target_field=summary_field
@@ -121,7 +137,7 @@ def load_and_tokenize_dataset(tokenizer):
             batched=True,
         )
 
-        dataset.select_columns(
+        dataset = dataset.select_columns(
             [
                 "input_ids",
                 "attention_mask",
@@ -139,7 +155,7 @@ def load_and_tokenize_dataset(tokenizer):
 
     # wikipedia
     print("Loading Wikipedia")
-    train_dataset2 = load_dataset("tarekziade/wikipedia-topics", split="train[:10%]")
+    train_dataset2 = load_dataset("tarekziade/wikipedia-topics", split="train[:2%]")
     train_dataset2 = prepare_dataset(train_dataset2, "text", "summary")
     train_dataset["train"] = concatenate_datasets(
         [train_dataset["train"], train_dataset2]
@@ -147,10 +163,17 @@ def load_and_tokenize_dataset(tokenizer):
 
     # xsum
     print("Loading xsum")
-    train_dataset3 = load_dataset("EdinburghNLP/xsum", split="train[:5%]")
+    train_dataset3 = load_dataset("EdinburghNLP/xsum", split="train[:1%]")
     train_dataset3 = prepare_dataset(train_dataset3, "document", "summary")
     train_dataset["train"] = concatenate_datasets(
         [train_dataset["train"], train_dataset3]
+    )
+
+    print("Loading tldr_news")
+    train_dataset4 = load_dataset("JulesBelveze/tldr_news", split="train")
+    train_dataset4 = prepare_dataset(train_dataset4, "content", "headline")
+    train_dataset["train"] = concatenate_datasets(
+        [train_dataset["train"], train_dataset4]
     )
 
     return train_dataset.shuffle()
@@ -224,11 +247,14 @@ def test_model(prefix, model, tokenizer):
 
 
 if __name__ == "__main__":
-    model_name = "cnicu/t5-small-booksum"
+    # model_name = "cnicu/t5-small-booksum"
     # model_name = "Alred/t5-small-finetuned-summarization-cnn"
     # model_name = "Falconsai/text_summarization"
+    # model_name = "flax-community/t5-base-cnn-dm"
+    # tokenizer_name = "t5-base"
 
-    tokenizer = T5Tokenizer.from_pretrained(model_name)
+    model_name = tokenizer_name = "JulesBelveze/t5-small-headline-generator"
+    tokenizer = T5Tokenizer.from_pretrained(tokenizer_name)
     shrunk_model = load_and_shrink_t5_model(model_name, tokenizer)
 
     test_model("After Shrink, before fine-tuning: ", shrunk_model, tokenizer)
