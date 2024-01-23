@@ -1,3 +1,4 @@
+import os
 import functools
 import torch
 from transformers import (
@@ -40,10 +41,13 @@ def get_size(model):
     return "%.2fM" % size
 
 
-def load_and_shrink_t5_model(model_name, tokenizer):
+def load_and_shrink_t5_model(model_name, tokenizer, layers=None):
     shrunk_model = T5ForConditionalGeneration.from_pretrained(model_name).to(device)
     current_decoder_layers = shrunk_model.config.num_decoder_layers
-    new_size = int(current_decoder_layers / 2)
+    if layers is None:
+        new_size = int(current_decoder_layers / 2)
+    else:
+        new_size = layers
 
     print(
         f"This model has {current_decoder_layers} layers, and {get_size(shrunk_model)} parameters shrinking in half"
@@ -153,24 +157,22 @@ def load_and_tokenize_dataset(tokenizer):
     train_dataset = load_dataset("kmfoda/booksum")
     train_dataset = prepare_dataset(train_dataset, "chapter", "summary_text")
 
-    # wikipedia
     print("Loading Wikipedia")
-    train_dataset2 = load_dataset("tarekziade/wikipedia-topics", split="train[:2%]")
+    train_dataset2 = load_dataset("tarekziade/wikipedia-topics", split="train[:5%]")
     train_dataset2 = prepare_dataset(train_dataset2, "text", "summary")
     train_dataset["train"] = concatenate_datasets(
         [train_dataset["train"], train_dataset2]
     )
 
-    # xsum
     print("Loading xsum")
-    train_dataset3 = load_dataset("EdinburghNLP/xsum", split="train[:1%]")
+    train_dataset3 = load_dataset("EdinburghNLP/xsum", split="train[:2%]")
     train_dataset3 = prepare_dataset(train_dataset3, "document", "summary")
     train_dataset["train"] = concatenate_datasets(
         [train_dataset["train"], train_dataset3]
     )
 
     print("Loading tldr_news")
-    train_dataset4 = load_dataset("JulesBelveze/tldr_news", split="train")
+    train_dataset4 = load_dataset("JulesBelveze/tldr_news", split="train[:50%]")
     train_dataset4 = prepare_dataset(train_dataset4, "content", "headline")
     train_dataset["train"] = concatenate_datasets(
         [train_dataset["train"], train_dataset4]
@@ -183,11 +185,11 @@ def fine_tune_model(model, tokenizer):
     tokenized_datasets = load_and_tokenize_dataset(tokenizer)
 
     training_args = Seq2SeqTrainingArguments(
+        run_name="shrink-and-finetune",
         output_dir="./results",
         num_train_epochs=4,
-        learning_rate=3e-4,
-        # lr_scheduler_type="constant",
-        per_device_train_batch_size=8,
+        learning_rate=2e-4,
+        per_device_train_batch_size=13,
         per_device_eval_batch_size=2,
         warmup_steps=100,
         weight_decay=0.01,
@@ -252,6 +254,8 @@ if __name__ == "__main__":
     # model_name = "Falconsai/text_summarization"
     # model_name = "flax-community/t5-base-cnn-dm"
     # tokenizer_name = "t5-base"
+    os.environ["WANDB_PROJECT"] = "shrink and fine-tune"  # name your W&B project
+    os.environ["WANDB_LOG_MODEL"] = "checkpoint"  # log all model checkpoints
 
     model_name = tokenizer_name = "JulesBelveze/t5-small-headline-generator"
     tokenizer = T5Tokenizer.from_pretrained(tokenizer_name)
@@ -262,4 +266,8 @@ if __name__ == "__main__":
         fine_tune_model(shrunk_model, tokenizer)
     finally:
         test_model("After Shrink and fine-tuning ", shrunk_model, tokenizer)
-        shrunk_model.save_pretrained(model_name.split("/")[-1] + "-sft")
+        shrunk_model.save_pretrained(
+            model_name.split("/")[-1]
+            + "-sft-"
+            + str(shrunk_model.config.num_decoder_layers)
+        )
