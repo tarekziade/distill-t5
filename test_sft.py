@@ -21,7 +21,6 @@ original = T5ForConditionalGeneration.from_pretrained(
 original.to(device)
 
 tokenizer = T5Tokenizer.from_pretrained("JulesBelveze/t5-small-headline-generator")
-dataset = load_dataset("JulesBelveze/tldr_news")
 
 
 def test_model(model, text):
@@ -77,17 +76,20 @@ def avg(source, num):
 
 
 num = 0
+
+dataset = load_dataset("JulesBelveze/tldr_news")
 for line in tqdm(dataset["test"]):
-    content = line["content"]
-    headline = line["headline"]
+    content = line["content"].strip()
+    headline = line["headline"].strip()
+
     if not content or not headline:
         continue
     try:
-        summary = test_model("original", original, content)
+        summary = test_model(original, content)
         or_ = evaluate(summary, headline)
         add(or_, teacher_scores)
 
-        shrinked_summary = test_model("shrinked", model, content)
+        shrinked_summary = test_model(model, content)
         sr = evaluate(shrinked_summary, headline)
         add(sr, student_scores)
         num += 1
