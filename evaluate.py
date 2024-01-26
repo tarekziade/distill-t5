@@ -71,6 +71,7 @@ class RougeScores:
     def avg(self):
         avg_scores = {}
         for metric, scores in self._scores.items():
+            avg_scores[metric] = {}
             for name, value in scores.items():
                 avg_scores[metric][name] = value / self._num
         return avg_scores
