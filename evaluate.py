@@ -8,65 +8,50 @@ generates accuracy values.
 import torch
 from transformers import T5ForConditionalGeneration, T5Tokenizer
 from rouge import Rouge
-from transformers import pipeline
-from pprint import pprint
 from datasets import load_dataset
 from tqdm import tqdm
-
 
 device = torch.device("cpu")
 
 
-student = T5ForConditionalGeneration.from_pretrained(
-    "./t5-small-headline-generator-sft-3"
-)
-student.to(device)
-
-teacher = T5ForConditionalGeneration.from_pretrained(
-    "JulesBelveze/t5-small-headline-generator"
-)
-teacher.to(device)
-
-tokenizer = T5Tokenizer.from_pretrained("JulesBelveze/t5-small-headline-generator")
-
-
-def summarize(student, text):
-    student.eval()
-
-    input_ids = tokenizer.encode(
-        "summarize: " + text,
-        return_tensors="pt",
-        padding="max_length",
-        truncation=True,
-        max_length=512,
-        add_special_tokens=False,
-    ).to(device)
-
-    generated_ids = student.generate(
-        input_ids, max_length=130, min_length=30, do_sample=False
-    )[0]
-    summary = tokenizer.decode(
-        generated_ids,
-        skip_special_tokens=True,
-        remove_invalid_values=True,
-    )
-
-    return summary
-
-
 class RougeScores:
-    def __init__(self):
+    """Keeps track of Rouge scores for a given model."""
+
+    def __init__(self, model_id, tokenizer_id):
         self._scores = {}
         self._num = 0
+        self._model = T5ForConditionalGeneration.from_pretrained(model_id)
+        self._model.to(device)
+        self._tokenizer = T5Tokenizer.from_pretrained(tokenizer_id)
+        self._scorer = Rouge()
 
-    def evaluate(self, summary, reference_summary):
-        score = self._evaluate(summary, reference_summary)
-        self._add(score)
+    def _summarize(self, text):
+        """Given a model and a text, returns a summary."""
+        self._model.eval()
 
-    def _evaluate(summary, reference_summary):
-        rouge = Rouge()
-        scores = rouge.get_scores(summary, reference_summary)
-        return scores[0]
+        input_ids = self._tokenizer.encode(
+            "summarize: " + text,
+            return_tensors="pt",
+            padding="max_length",
+            truncation=True,
+            max_length=512,
+            add_special_tokens=False,
+        ).to(device)
+
+        generated_ids = self._model.generate(
+            input_ids, max_length=130, min_length=30, do_sample=False
+        )[0]
+
+        return self._tokenizer.decode(
+            generated_ids,
+            skip_special_tokens=True,
+            remove_invalid_values=True,
+        )
+
+    def evaluate(self, content, reference_summary):
+        summary = self._summarize(content)
+        scores = self._scorer.get_scores(summary, reference_summary)
+        self._add(scores[0])
 
     def _add(self, source):
         for metric, scores in source.items():
@@ -74,7 +59,7 @@ class RougeScores:
                 self._scores[metric] = scores
             else:
                 for name, value in scores.items():
-                    if name not in target[metric]:
+                    if name not in self._scores[metric]:
                         self._scores[metric][name] = value
                     else:
                         self._scores[metric][name] += value
@@ -107,38 +92,44 @@ class RougeScores:
 
         return accuracy_scores
 
+    def print_accuracy(self, teacher):
+        acc = self.accuracy(teacher)
 
-teacher_scores = RougeScores()
-student_scores = RougeScores()
+        def replace(name):
+            if name == "f":
+                return "F1"
+            if name == "p":
+                return "Precision"
+            return "Recall"
+
+        for metric, scores in acc.items():
+            print(f"{metric} Accuracy:")
+            for name, value in scores.items():
+                print(f"- {replace(name)} Accuracy: {value:.2f}%")
+            print()
+
+
+teacher = RougeScores(
+    "JulesBelveze/t5-small-headline-generator",
+    "JulesBelveze/t5-small-headline-generator",
+)
+
+student = RougeScores(
+    "./t5-small-headline-generator-sft-3", "JulesBelveze/t5-small-headline-generator"
+)
 
 
 dataset = load_dataset("JulesBelveze/tldr_news")
+
 for line in tqdm(dataset["test"]):
     content = line["content"].strip()
     headline = line["headline"].strip()
 
     if not content or not headline:
         continue
-    try:
-        teacher_scores.evaluate(summarize(teacher, content), headline)
-        student_scores.evaluate(summarize(student, content), headline)
-    except Exception:
-        pass
+
+    teacher.evaluate(content, headline)
+    student.evaluate(content, headline)
 
 
-accuracy = student.accuracy(teacher)
-
-
-def replace(name):
-    if name == "f":
-        return "F1"
-    if name == "p":
-        return "Precision"
-    return "Recall"
-
-
-for metric, scores in accuracy.items():
-    print(f"{metric} Accuracy:")
-    for name, value in scores.items():
-        print(f"- {replace(name)} Accuracy: {value:.2f}%")
-    print()
+student.print_accuracy(teacher)
