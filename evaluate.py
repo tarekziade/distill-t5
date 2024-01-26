@@ -49,7 +49,10 @@ class RougeScores:
         )
 
     def evaluate(self, content, reference_summary):
-        summary = self._summarize(content)
+        summary = self._summarize(content).strip()
+        if summary == "":
+            print("Summary is empty!")
+            return
         scores = self._scorer.get_scores(summary, reference_summary)
         self._add(scores[0])
 
