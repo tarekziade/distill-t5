@@ -158,24 +158,62 @@ def load_and_tokenize_dataset(tokenizer):
         )
         return dataset
 
-    print("Loading Booksum")
-    train_dataset = load_dataset("kmfoda/booksum")
-    train_dataset = prepare_dataset(train_dataset, "chapter", "summary_text")
+    # print("Loading Booksum")
+    # train_dataset = load_dataset("kmfoda/booksum")
+    # train_dataset = prepare_dataset(train_dataset, "chapter", "summary_text")
 
     # adding more data to the test split from Wikipedia, xsum and tldr_news
-    for dataset, split, source_field, target_field in (
-        ("tarekziade/wikipedia-topics", "train[:5%]", "text", "summary"),
-        ("EdinburghNLP/xsum", "train[:2%]", "document", "summary"),
-        ("JulesBelveze/tldr_news", "train[:50%]", "content", "headline"),
-    ):
-        print(f"Loading {dataset}")
-        extra_dataset = load_dataset(dataset, split=split)
-        extra_dataset = prepare_dataset(extra_dataset, source_field, target_field)
-        train_dataset["train"] = concatenate_datasets(
-            [train_dataset["train"], extra_dataset]
+    # for dataset, split, source_field, target_field in (
+    #    ("tarekziade/wikipedia-topics", "train[:20%]", "text", "summary"),
+    #    ("EdinburghNLP/xsum", "train[:5%]", "document", "summary"),
+    #    ("JulesBelveze/tldr_news", "train[:50%]", "content", "headline"),
+    # ):
+    #    print(f"Loading {dataset}")
+    #    extra_dataset = load_dataset(dataset, split=split)
+    #    extra_dataset = prepare_dataset(extra_dataset, source_field, target_field)
+    #    train_dataset["train"] = concatenate_datasets(
+    #        [train_dataset["train"], extra_dataset]
+    #    )
+    train_dataset = load_dataset("JulesBelveze/tldr_news")
+    train_dataset = prepare_dataset(train_dataset, "content", "headline")
+    return train_dataset.shuffle()
+
+
+class CustomEarlyStoppingCallback(EarlyStoppingCallback):
+    def on_evaluate(self, args, state, control, metrics, **kwargs):
+        print(f"current state.best_metric: {state.best_metric}")
+        print(
+            f"current early_stopping_patience_counter: {self.early_stopping_patience_counter}"
         )
 
-    return train_dataset.shuffle()
+        metric_to_check = args.metric_for_best_model
+        if not metric_to_check.startswith("eval_"):
+            metric_to_check = f"eval_{metric_to_check}"
+        metric_value = metrics.get(metric_to_check)
+        print(
+            f"metric value: {metric_value} for metric: {metric_to_check} and state.best_metric: {state.best_metric}"
+        )
+
+        self.check_metric_value(args, state, control, metric_value)
+        if self.early_stopping_patience_counter >= self.early_stopping_patience:
+            control.should_training_stop = True
+
+    def check_metric_value(self, args, state, control, metric_value):
+        # best_metric is set by code for load_best_model
+        operator = np.greater if args.greater_is_better else np.less
+        if state.best_metric is None:
+            self.early_stopping_patience_counter = 0
+            return
+
+        val = operator(metric_value, state.best_metric)
+        diff = abs(metric_value - state.best_metric)
+        print(f"less(metric_value, state.best_metric) == {val}")
+        print(f"abs(metric_value - state.best_metric) == {diff}")
+
+        if val and diff > self.early_stopping_threshold:
+            self.early_stopping_patience_counter = 0
+        else:
+            self.early_stopping_patience_counter += 1
 
 
 def fine_tune_model(model, tokenizer):
@@ -184,18 +222,20 @@ def fine_tune_model(model, tokenizer):
     training_args = Seq2SeqTrainingArguments(
         run_name="shrink-and-finetune",
         output_dir="./results",
-        num_train_epochs=4,
+        overwrite_output_dir=True,
+        num_train_epochs=1,
         learning_rate=2e-4,
-        per_device_train_batch_size=13,
+        per_device_train_batch_size=8,
         per_device_eval_batch_size=2,
         warmup_steps=100,
         weight_decay=0.01,
         logging_dir="./logs",
         logging_steps=10,
         report_to="wandb",
-        evaluation_strategy="steps",
-        eval_steps=1000,
-        save_steps=1000,
+        evaluation_strategy="epoch",
+        save_strategy="epoch",
+        # eval_steps=10,
+        # save_steps=10,
         load_best_model_at_end=True,
     )
 
@@ -203,15 +243,17 @@ def fine_tune_model(model, tokenizer):
         model=model,
         args=training_args,
         train_dataset=tokenized_datasets["train"],
-        eval_dataset=tokenized_datasets["validation"],
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=5)]
+        eval_dataset=tokenized_datasets["test"],
+        # callbacks=[
+        #    CustomEarlyStoppingCallback(
+        #        early_stopping_patience=5, early_stopping_threshold=0.1
+        #    )
+        # ]
         # compute_metrics=lambda eval_pred: compute_metrics(eval_pred, tokenizer),
     )
 
     trainer.train()
-
     trainer.eval_dataset = tokenized_datasets["test"]
-
     metrics = trainer.evaluate()
     print(metrics)
 
