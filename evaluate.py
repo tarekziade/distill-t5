@@ -119,7 +119,8 @@ teacher = RougeScores(
 )
 
 student = RougeScores(
-    "tarekziade/t5-small-headline-generator-shrinked",
+    #    "tarekziade/t5-small-headline-generator-shrinked",
+    "./t5-small-headline-generator-sft-3-3",
     "JulesBelveze/t5-small-headline-generator",
 )
 

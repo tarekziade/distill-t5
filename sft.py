@@ -1,8 +1,12 @@
 """
-Shrink and Fine-tune a T5 model for summarization.
+Shrink and Fine-tune a T5 model for summarization, as described in
 
-1. remove 50% of the decoder layers
-2. fine-tune the shrinked model with various datasets
+https://arxiv.org/pdf/2010.13002.pdf
+PRE-TRAINED SUMMARIZATION DISTILLATION
+Sam Shleifer - Alexander M. Rush
+
+1. Create a student model with the original weight but some layers removed.
+2. Fine-tune the student model with the original dataset that was used to train the teacher
 """
 import os
 import functools
