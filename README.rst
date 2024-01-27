@@ -42,7 +42,7 @@ The former reduces the size from 60.6M params to 47.9M and the latter to 38.5M.
 
 This is the gist of the code used to shrink layers using transformers:
 
-..code-block:: python
+.. code-block:: python
 
   def shrink_layer(model, layer_name, new_size=None):
     if layer_name == "encoder":
@@ -84,7 +84,16 @@ This is the gist of the code used to shrink layers using transformers:
 Training
 ########
 
-TODO
+Once the model was shrunk, I fined tuned it on the same dataset. I tried
+many different configurations and found that a single epoch was as good as
+running many. The loss convergence happened pretty quickly and the training
+lasts for less than 10 minutes.
+
+You can find the train script here : https://github.com/tarekziade/distill-t5/blob/main/sft.py
+
+
+.. image:: loss.png
+  :alt: Show the loss chart. The loss goes down to 0.2 quickly and then stays there.
 
 
 Once saved and quantized, the smallest model is down to 50MiB (as opposed to 250MiB) !
@@ -98,5 +107,41 @@ Using the demo script, from Jules' model card, I get those summaries:
 Evaluation
 ##########
 
-TODO
+Last, I used the ROUGE metrics to evaluate the model and compare to the original model's ROUGE score,
+to get an idea of how accurate the new model is.
+
+You can find the script here: https://github.com/tarekziade/distill-t5/blob/main/evaluate.py
+it runs on the non quantized versions.
+
+These are the results for the most agressive shrinking (3-3):
+
+- rouge-1 Accuracy:
+
+  - F1 Accuracy: 92.27%
+  - Precision Accuracy: 91.83%
+  - Recall Accuracy: 93.95%
+
+- rouge-2 Accuracy:
+
+  - F1 Accuracy: 94.48%
+  - Precision Accuracy: 95.40%
+  - Recall Accuracy: 92.01%
+
+- rouge-l Accuracy:
+
+  - F1 Accuracy: 92.53%
+  - Precision Accuracy: 92.11%
+  - Recall Accuracy: 94.17%
+
+
+This is amazingly good! Maybe because the model is doing tiny summaries.
+
+I will try this recipe on larger summarizers and see what happens.
+
+To recap:
+
+**Shrinking encoder and decoder layers shaved off 40% of the model size and kept over 90% of accuracy**
+
+And if we quantize it, we are shaving off 80% of the size!
+
 
