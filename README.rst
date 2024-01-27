@@ -1,26 +1,35 @@
 Compressing T5 models for summarization
 =======================================
 
+:date: 2024-01-27
+:tags: python
+:category: ai
+:author: Tarek Ziade
+
 My quest to create a summarizer model that is as small as possible,
 yet produce good results, is still going on.
 
 I've stumbled on the https://github.com/JulesBelveze/bert-squeeze project which
 is a pretty cool project that applies different strategies to compress models
-and wanted to try it on a longt5 model.
+and wanted to try it on a long-t5 model -- the model I want to use for summarization
+because it allows large documents (16k tokens).
 
 Unfortunately, the project does not support seq2seq models yet. But Jules is
-a very nice guy and is willing to take my contribution and helped me understand
+a very nice guy and is willing to take my contributions. He helped me understand
 a few things around models.
 
 He pointed me to a research paper about the "Shrink and Fine-tune" strategy,
-(see https://arxiv.org/pdf/2010.13002.pdf) which consist of pruning some decoder
-layers from the original model and
-then fine-tuning it again with the data that was used to train the original model.
+(see https://arxiv.org/pdf/2010.13002.pdf) which consists of pruning some decoder
+layers from the original model and then fine-tuning it again with the data
+that was used to train the original model.
 
 So it's not a distillation per se, it's a fine-tuning on a model that has some
 of the initial layers removed.
 
-I gave up on the idea of training longt5 models on my Apple M1 because the 32GiB
+So I told Jules I would try it and if it works, come back to contribute
+a first patch to his project for seq2seq models.
+
+I gave up on the idea of training long-t5 models on my Apple M1 because the 32GiB
 memory that is shared between the GPU and the CPU dies pretty quickly given
 the size of the data. longt5 accepts 16k tokens instead of 512, which blows my
 memory. PyTorch's GPU backend is also three times slower than the CPU for me,
@@ -98,16 +107,29 @@ You can find the train script here : https://github.com/tarekziade/distill-t5/bl
 
 Once saved and quantized, the smallest model is down to 50MiB (as opposed to 250MiB) !
 
-Using the demo script, from Jules' model card, I get those summaries:
+Using the demo script, from Jules' model card, I took the demo text:
 
-- Original: US FCC commissioner asks Apple and Google to remove TikTok from app stores
-- 50% decoder layers: Apple and Google to remove TikTok from their app stores
-- 50% encoder and decoder layers: China’s TikTok says it can harvest data from U.S. citizens
+  US FCC commissioner Brendan Carr has asked Apple and Google to remove TikTok from their app stores.
+  The video app is owned by Chinese company ByteDance.
+  Carr claims that TikTok functions as a surveillance tool that harvests extensive amounts of personal and sensitive data from US citizens.
+  TikTok says its data access approval process is overseen by a US-based security team and
+  that data is only accessed on an as-needed basis under strict controls.
+
+
+I get those summaries:
+
+**Original model** US FCC commissioner asks Apple and Google to remove TikTok from app stores
+
+**50% decoder layers** Apple and Google to remove TikTok from their app stores
+
+**50% encoder and decoder layers** China’s TikTok says it can harvest data from U.S. citizens
+
+This is just a human evaluation though, we need some metrics.
 
 Evaluation
 ##########
 
-Last, I used the ROUGE metrics to evaluate the model and compare to the original model's ROUGE score,
+I used the standard ROUGE metrics to evaluate the model and compare to the original model's ROUGE score,
 to get an idea of how accurate the new model is.
 
 You can find the script here: https://github.com/tarekziade/distill-t5/blob/main/evaluate.py
@@ -115,23 +137,23 @@ it runs on the non quantized versions.
 
 These are the results for the most agressive shrinking (3-3):
 
-- rouge-1 Accuracy:
+**Rouge-1**
 
-  - F1 Accuracy: 92.27%
-  - Precision Accuracy: 91.83%
-  - Recall Accuracy: 93.95%
+- F1 Accuracy: 92.27%
+- Precision Accuracy: 91.83%
+- Recall Accuracy: 93.95%
 
-- rouge-2 Accuracy:
+**Rouge-2**
 
-  - F1 Accuracy: 94.48%
-  - Precision Accuracy: 95.40%
-  - Recall Accuracy: 92.01%
+- F1 Accuracy: 94.48%
+- Precision Accuracy: 95.40%
+- Recall Accuracy: 92.01%
 
-- rouge-l Accuracy:
+**Rouge-l**
 
-  - F1 Accuracy: 92.53%
-  - Precision Accuracy: 92.11%
-  - Recall Accuracy: 94.17%
+- F1 Accuracy: 92.53%
+- Precision Accuracy: 92.11%
+- Recall Accuracy: 94.17%
 
 
 This is amazingly good! Maybe because the model is doing tiny summaries.
