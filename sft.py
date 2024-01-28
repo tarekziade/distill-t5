@@ -8,6 +8,7 @@ Sam Shleifer - Alexander M. Rush
 1. Create a student model with the original weight but some layers removed.
 2. Fine-tune the student model with the original dataset that was used to train the teacher
 """
+import argparse
 import os
 import functools
 import re
@@ -80,7 +81,7 @@ def load_and_shrink_t5_model(
     return model
 
 
-def load_and_tokenize_dataset(name, tokenizer):
+def load_and_tokenize_dataset(name, tokenizer, input_field, output_field, input_prefix):
     def sentence_aware_truncation(text, max_length):
         """Truncate at the sentence level so it fits in the max_length tokens"""
         sentences = nltk.tokenize.sent_tokenize(text)
@@ -98,7 +99,7 @@ def load_and_tokenize_dataset(name, tokenizer):
     def tokenize_function(example, source_field, target_field):
         inputs = tokenizer(
             [
-                sentence_aware_truncation("summarize: " + clean_text(text), 512)
+                sentence_aware_truncation(input_prefix + clean_text(text), 512)
                 for text in example[source_field]
             ],
             padding="max_length",
@@ -149,12 +150,16 @@ def load_and_tokenize_dataset(name, tokenizer):
         return dataset
 
     train_dataset = load_dataset(name)
-    train_dataset = prepare_dataset(train_dataset, "content", "headline")
+    train_dataset = prepare_dataset(train_dataset, input_field, output_field)
     return train_dataset.shuffle()
 
 
-def fine_tune_model(dataset_name, model, tokenizer):
-    tokenized_datasets = load_and_tokenize_dataset(dataset_name, tokenizer)
+def fine_tune_model(
+    dataset_name, model, tokenizer, input_field, output_field, input_prefix
+):
+    tokenized_datasets = load_and_tokenize_dataset(
+        dataset_name, tokenizer, input_field, output_field, input_prefix
+    )
 
     training_args = Seq2SeqTrainingArguments(
         run_name="shrink-and-finetune",
@@ -189,19 +194,68 @@ def fine_tune_model(dataset_name, model, tokenizer):
     print(metrics)
 
 
+def parse_arguments():
+    parser = argparse.ArgumentParser(description="Process command line arguments.")
+    parser.add_argument(
+        "--model-id",
+        type=str,
+        help="Model ID",
+        default="JulesBelveze/t5-small-headline-generator",
+    )
+    parser.add_argument(
+        "--dataset-name",
+        type=str,
+        help="Dataset name",
+        default="JulesBelveze/tldr_news",
+    )
+    parser.add_argument(
+        "--dataset-input-field",
+        type=str,
+        help="Dataset input field name",
+        default="content",
+    )
+    parser.add_argument(
+        "--dataset-output-field",
+        type=str,
+        help="Dataset output field name",
+        default="headline",
+    )
+    parser.add_argument(
+        "--input-prefix",
+        type=str,
+        help="Input prefix",
+        default="summarize: ",
+    )
+
+    parser.add_argument(
+        "--tokenizer-id",
+        type=str,
+        help="Tokenizer ID",
+        default="JulesBelveze/t5-small-headline-generator",
+    )
+    args = parser.parse_args()
+    return args
+
+
 if __name__ == "__main__":
     os.environ["WANDB_PROJECT"] = "shrink-and-fine-tune"  # name your W&B project
     os.environ["WANDB_LOG_MODEL"] = "checkpoint"  # log all model checkpoints
-    model_name = tokenizer_name = "JulesBelveze/t5-small-headline-generator"
-    dataset_name = "JulesBelveze/tldr_news"
+    args = parse_arguments()
 
-    tokenizer = T5Tokenizer.from_pretrained(tokenizer_name)
-    shrunk_model = load_and_shrink_t5_model(model_name)
+    tokenizer = T5Tokenizer.from_pretrained(args.tokenizer_id)
+    shrunk_model = load_and_shrink_t5_model(args.model_id)
 
     try:
-        fine_tune_model(dataset_name, shrunk_model, tokenizer)
+        fine_tune_model(
+            args.dataset_name,
+            shrunk_model,
+            tokenizer,
+            args.dataset_input_field,
+            args.dataset_output_field,
+            args.input_prefix,
+        )
     finally:
-        target_dir = f"{model_name.split('/')[-1]}-sft-{shrunk_model.config.num_layers}-{shrunk_model.config.num_decoder_layers}"
+        target_dir = f"{args.model_id.split('/')[-1]}-sft-{shrunk_model.config.num_layers}-{shrunk_model.config.num_decoder_layers}"
 
         shrunk_model.save_pretrained(target_dir)
         tokenizer.save_pretrained(target_dir)
